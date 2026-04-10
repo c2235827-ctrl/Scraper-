@@ -48,7 +48,10 @@ async function startServer() {
       );
 
       // Go to WhatsApp Web first (not the invite link — that can redirect weirdly)
-      await page.goto("https://web.whatsapp.com", { waitUntil: "networkidle2" });
+      await page.goto("https://web.whatsapp.com", { 
+        waitUntil: "domcontentloaded", 
+        timeout: 120000 // 2 minutes timeout for slow loading
+      });
 
       // Wait for QR code and expose it to the frontend
       const qrInterval = setInterval(async () => {
@@ -74,11 +77,11 @@ async function startServer() {
 
       // Wait for login (chat list appears)
       try {
-        // Increased timeout to 3 minutes (180000ms) to give users plenty of time to scan the QR code
+        // Increased timeout to 5 minutes (300000ms) to give users plenty of time to scan the QR code and sync messages
         // We wait for the side pane which contains the chat list
-        await page.waitForSelector('#pane-side', { timeout: 180000 });
+        await page.waitForSelector('#pane-side', { timeout: 300000 });
       } catch (e) {
-        throw new Error("Login timed out. Please ensure you scan the QR code within 3 minutes.");
+        throw new Error("Login timed out. Please ensure you scan the QR code within 5 minutes.");
       }
       
       clearInterval(qrInterval);
@@ -87,13 +90,18 @@ async function startServer() {
 
       console.log("✅ Logged in. Navigating to group...");
 
-      // Now navigate to the invite link to open the group
-      await page.goto(`https://chat.whatsapp.com/${inviteCode}`, {
-        waitUntil: "networkidle2",
+      // Now navigate to the invite link to open the group directly in WhatsApp Web
+      await page.goto(`https://web.whatsapp.com/accept?code=${inviteCode}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 120000
       });
 
       // Wait for the group chat to load
-      await page.waitForSelector("#main", { timeout: 30000 });
+      try {
+        await page.waitForSelector("#main", { timeout: 120000 });
+      } catch (e) {
+        throw new Error("Failed to load the group chat. The invite link might be invalid or expired.");
+      }
       await sleep(2000);
 
       // Click the group header to open the info panel
