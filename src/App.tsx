@@ -93,6 +93,19 @@ export default function App() {
     document.body.removeChild(element);
   };
 
+  const resetScraper = async () => {
+    try {
+      await fetch('/reset', { method: 'POST' });
+      setStatus('idle');
+      setLink('');
+      setMembers([]);
+      setQrCodeData(null);
+      setErrorMsg('');
+    } catch (err) {
+      console.error('Failed to reset:', err);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#111b21] text-[#e9edef] font-sans selection:bg-[#00a884] selection:text-white flex flex-col items-center py-12 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-2xl space-y-8">
@@ -165,6 +178,17 @@ export default function App() {
                 {status === 'qr' && qrCodeData && (
                   <div className="flex justify-center p-6 bg-white rounded-xl mx-auto mt-2">
                     <QRCode value={qrCodeData} size={256} />
+                  </div>
+                )}
+                
+                {status === 'done' && (
+                  <div className="flex justify-end mt-2">
+                    <button
+                      onClick={resetScraper}
+                      className="text-sm font-medium text-[#00a884] hover:text-[#008f6f] transition-colors"
+                    >
+                      Scrape Another Group
+                    </button>
                   </div>
                 )}
               </div>

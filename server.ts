@@ -26,116 +26,155 @@ async function startServer() {
       return res.status(400).json({ error: "A scraping session is already in progress" });
     }
 
-    currentStatus = "scanning";
+    currentStatus = "qr";
     extractedMembers = [];
     currentQrCode = null;
-    res.json({ status: "scanning" });
+    res.json({ status: "qr" });
 
     try {
-      // Extract invite code from the link
       const match = link.match(/chat\.whatsapp\.com\/([A-Za-z0-9]+)/);
-      if (!match) {
-        throw new Error("Invalid WhatsApp group link");
-      }
+      if (!match) throw new Error("Invalid WhatsApp group link");
       const inviteCode = match[1];
 
-      // Launch Puppeteer
       browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        headless: false, // MUST be visible — WhatsApp Web requires real browser
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        defaultViewport: null,
       });
 
       const page = await browser.newPage();
-      
-      // Set a realistic user agent to avoid basic blocking
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+      await page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+      );
 
-      // Go to WhatsApp Web with the invite code
-      await page.goto(`https://web.whatsapp.com/accept?code=${inviteCode}`, { waitUntil: 'networkidle2' });
+      // Go to WhatsApp Web first (not the invite link — that can redirect weirdly)
+      await page.goto("https://web.whatsapp.com", { waitUntil: "networkidle2" });
 
-      currentStatus = "qr";
-
-      // Wait for QR code data-ref
-      try {
-        await page.waitForSelector('div[data-ref]', { timeout: 30000 });
-        const qrData = await page.$eval('div[data-ref]', (el) => el.getAttribute('data-ref'));
-        if (qrData) {
-          currentQrCode = qrData;
-          console.log('\n\n=========================================');
-          console.log('SCAN THIS QR CODE WITH WHATSAPP:');
-          qrcode.generate(qrData, { small: true });
-          console.log('=========================================\n\n');
+      // Wait for QR code and expose it to the frontend
+      const qrInterval = setInterval(async () => {
+        if (currentStatus !== "qr") {
+          clearInterval(qrInterval);
+          return;
         }
-        
-        // Start a loop to keep updating the QR code if it changes (WhatsApp rotates it)
-        const qrInterval = setInterval(async () => {
-          if (currentStatus !== "qr") {
-            clearInterval(qrInterval);
-            return;
+        try {
+          const qrData = await page.$eval('div[data-ref]', (el) =>
+            el.getAttribute("data-ref")
+          );
+          if (qrData && qrData !== currentQrCode) {
+            currentQrCode = qrData;
+            console.log("\n=========================================");
+            console.log("SCAN THIS QR CODE WITH WHATSAPP:");
+            qrcode.generate(qrData, { small: true });
+            console.log("=========================================\n");
           }
-          try {
-            const newQrData = await page.$eval('div[data-ref]', (el) => el.getAttribute('data-ref'));
-            if (newQrData && newQrData !== currentQrCode) {
-              currentQrCode = newQrData;
-            }
-          } catch (e) {
-            // Element might be gone if logged in
-          }
-        }, 2000);
+        } catch (_) {
+          // QR element gone = logged in
+        }
+      }, 2000);
 
-      } catch (e) {
-        console.log("QR code not found. Might already be logged in or page structure changed.");
+      // Wait for login (chat list appears)
+      await page.waitForSelector('[data-testid="chat-list"]', { timeout: 120000 });
+      clearInterval(qrInterval);
+      currentQrCode = null;
+      currentStatus = "scraping";
+
+      console.log("✅ Logged in. Navigating to group...");
+
+      // Now navigate to the invite link to open the group
+      await page.goto(`https://chat.whatsapp.com/${inviteCode}`, {
+        waitUntil: "networkidle2",
+      });
+
+      // Wait for the group chat to load
+      await page.waitForSelector("#main", { timeout: 30000 });
+      await sleep(2000);
+
+      // Click the group header to open the info panel
+      console.log("📋 Opening group info panel...");
+      await page.click("#main header");
+      await sleep(2000);
+
+      // Wait for the right drawer / info panel to open
+      await page.waitForSelector('[data-testid="drawer-right"]', { timeout: 15000 });
+      await sleep(1500);
+
+      // Scroll the right drawer panel to load ALL virtualized participants
+      console.log("⬇️  Scrolling to load all members...");
+      const totalScrolls = 60; // Handles groups up to ~500 members
+      for (let i = 0; i < totalScrolls; i++) {
+        await page.evaluate(() => {
+          const panel = document.querySelector('[data-testid="drawer-right"]');
+          if (panel) panel.scrollTop += 400;
+        });
+        await sleep(200);
       }
 
-      // Wait for the main chat window to load (indicates successful login and group join)
-      await page.waitForSelector('#main', { timeout: 60000 });
-      currentStatus = "scraping";
-      currentQrCode = null; // Clear QR code once logged in
+      // Scroll back to top and do it again (to catch late-loading items)
+      await page.evaluate(() => {
+        const panel = document.querySelector('[data-testid="drawer-right"]');
+        if (panel) panel.scrollTop = 0;
+      });
+      await sleep(500);
 
-      // Click the group header to open the info sidebar
-      await page.click('#main header').catch(() => {});
-      
-      // Wait a bit for the sidebar animation and members to load
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      for (let i = 0; i < totalScrolls; i++) {
+        await page.evaluate(() => {
+          const panel = document.querySelector('[data-testid="drawer-right"]');
+          if (panel) panel.scrollTop += 400;
+        });
+        await sleep(150);
+      }
 
-      // Extract members
-      // WhatsApp DOM is heavily obfuscated and virtualized. This is a heuristic approach.
+      await sleep(1000);
+
+      // Extract all participant names/numbers from the info panel
+      console.log("📤 Extracting members...");
       const members = await page.evaluate(() => {
         const results = new Set<string>();
-        
-        // 1. Try to get from the subtitle (comma separated list of names/numbers)
-        const subtitleEl = document.querySelector('#main header span[title]');
-        if (subtitleEl) {
-          const title = subtitleEl.getAttribute('title');
-          if (title) {
-            title.split(',').forEach(s => {
-              const trimmed = s.trim();
-              if (trimmed && trimmed.toLowerCase() !== 'you') {
-                results.add(trimmed);
-              }
-            });
-          }
-        }
 
-        // 2. Try to get from the sidebar DOM (phone numbers)
-        // Look for typical member row containers or text elements
-        const spans = document.querySelectorAll('span[dir="auto"]');
-        spans.forEach(span => {
-          const text = span.textContent;
-          if (text) {
-            // Match phone numbers (e.g., +1 234 567 8900)
-            if (text.match(/^\+?\d[\d\s\-()]{7,}\d$/)) {
+        // Primary selector: participant cell titles in the drawer
+        const selectors = [
+          '[data-testid="drawer-right"] [data-testid="cell-frame-title"] span',
+          '[data-testid="drawer-right"] ._21S-L span[dir="auto"]',
+          '[data-testid="drawer-right"] span[dir="auto"][title]',
+          '[data-testid="drawer-right"] .zoWT4 span[dir="auto"]',
+        ];
+
+        for (const sel of selectors) {
+          document.querySelectorAll(sel).forEach((el) => {
+            const text = (el as HTMLElement).innerText?.trim() ||
+              el.getAttribute("title")?.trim() || "";
+
+            if (
+              text &&
+              text.length > 2 &&
+              text !== "You" &&
+              !text.includes("member") &&
+              !text.toLowerCase().includes("add participant")
+            ) {
               results.add(text);
             }
-          }
-        });
+          });
+        }
+
+        // Fallback: scan all spans with title attribute in the drawer
+        // This catches phone numbers for unsaved contacts
+        const drawer = document.querySelector('[data-testid="drawer-right"]');
+        if (drawer) {
+          drawer.querySelectorAll("span[title]").forEach((el) => {
+            const title = el.getAttribute("title")?.trim() || "";
+            // Phone number pattern: starts with + or digits, 7+ chars
+            if (title && (title.startsWith("+") || /^\d{7,}/.test(title))) {
+              results.add(title);
+            }
+          });
+        }
 
         return Array.from(results);
       });
 
+      console.log(`✅ Found ${members.length} members`);
       extractedMembers = members;
       currentStatus = "done";
-
     } catch (error) {
       console.error("Scraping error:", error);
       currentStatus = "error";
@@ -148,7 +187,19 @@ async function startServer() {
   });
 
   app.get("/status", (req, res) => {
-    res.json({ status: currentStatus, members: extractedMembers, qrCode: currentQrCode });
+    res.json({
+      status: currentStatus,
+      members: extractedMembers,
+      qrCode: currentQrCode,
+    });
+  });
+
+  // Reset endpoint so user can run again without restarting server
+  app.post("/reset", (req, res) => {
+    currentStatus = "idle";
+    extractedMembers = [];
+    currentQrCode = null;
+    res.json({ ok: true });
   });
 
   // Vite middleware for development
@@ -159,16 +210,21 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get('*all', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*all", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`\n🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📱 Open the app, paste a group link, and scan the QR code\n`);
   });
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 startServer();
