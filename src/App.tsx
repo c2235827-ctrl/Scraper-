@@ -181,6 +181,20 @@ export default function App() {
                   </div>
                 )}
                 
+                {status === 'done' && members.length === 0 && (
+                  <div className="mt-4 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-xl text-yellow-500 text-sm font-medium flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 shrink-0" />
+                    <div>
+                      No members could be extracted. This could mean:
+                      <ul className="list-disc ml-5 mt-2 space-y-1 text-yellow-500/80">
+                        <li>The group is completely empty.</li>
+                        <li>WhatsApp blocked the automated browser.</li>
+                        <li>The WhatsApp Web layout changed.</li>
+                      </ul>
+                    </div>
+                  </div>
+                )}
+                
                 {status === 'done' && (
                   <div className="flex justify-end mt-2">
                     <button
