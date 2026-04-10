@@ -13,6 +13,7 @@ async function startServer() {
 
   let currentStatus: "idle" | "qr" | "scraping" | "done" | "error" = "idle";
   let extractedMembers: string[] = [];
+  let currentQrCode: string | null = null;
   let browser: puppeteer.Browser | null = null;
 
   app.post("/scrape", async (req, res) => {
@@ -27,6 +28,7 @@ async function startServer() {
 
     currentStatus = "scanning";
     extractedMembers = [];
+    currentQrCode = null;
     res.json({ status: "scanning" });
 
     try {
@@ -58,11 +60,29 @@ async function startServer() {
         await page.waitForSelector('div[data-ref]', { timeout: 30000 });
         const qrData = await page.$eval('div[data-ref]', (el) => el.getAttribute('data-ref'));
         if (qrData) {
+          currentQrCode = qrData;
           console.log('\n\n=========================================');
           console.log('SCAN THIS QR CODE WITH WHATSAPP:');
           qrcode.generate(qrData, { small: true });
           console.log('=========================================\n\n');
         }
+        
+        // Start a loop to keep updating the QR code if it changes (WhatsApp rotates it)
+        const qrInterval = setInterval(async () => {
+          if (currentStatus !== "qr") {
+            clearInterval(qrInterval);
+            return;
+          }
+          try {
+            const newQrData = await page.$eval('div[data-ref]', (el) => el.getAttribute('data-ref'));
+            if (newQrData && newQrData !== currentQrCode) {
+              currentQrCode = newQrData;
+            }
+          } catch (e) {
+            // Element might be gone if logged in
+          }
+        }, 2000);
+
       } catch (e) {
         console.log("QR code not found. Might already be logged in or page structure changed.");
       }
@@ -70,6 +90,7 @@ async function startServer() {
       // Wait for the main chat window to load (indicates successful login and group join)
       await page.waitForSelector('#main', { timeout: 60000 });
       currentStatus = "scraping";
+      currentQrCode = null; // Clear QR code once logged in
 
       // Click the group header to open the info sidebar
       await page.click('#main header').catch(() => {});
@@ -127,7 +148,7 @@ async function startServer() {
   });
 
   app.get("/status", (req, res) => {
-    res.json({ status: currentStatus, members: extractedMembers });
+    res.json({ status: currentStatus, members: extractedMembers, qrCode: currentQrCode });
   });
 
   // Vite middleware for development

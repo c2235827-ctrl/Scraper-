@@ -5,11 +5,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Download, Copy, Users, QrCode, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import QRCode from 'react-qr-code';
 
 export default function App() {
   const [link, setLink] = useState('');
   const [status, setStatus] = useState<'idle' | 'scanning' | 'qr' | 'scraping' | 'done' | 'error'>('idle');
   const [members, setMembers] = useState<string[]>([]);
+  const [qrCodeData, setQrCodeData] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const pollingInterval = useRef<NodeJS.Timeout | null>(null);
 
@@ -24,6 +26,7 @@ export default function App() {
       setStatus('scanning');
       setErrorMsg('');
       setMembers([]);
+      setQrCodeData(null);
       
       const res = await fetch('/scrape', {
         method: 'POST',
@@ -50,6 +53,10 @@ export default function App() {
       
       const data = await res.json();
       
+      if (data.qrCode) {
+        setQrCodeData(data.qrCode);
+      }
+
       if (data.status === 'qr') setStatus('qr');
       else if (data.status === 'scraping') setStatus('scraping');
       else if (data.status === 'done') {
@@ -135,23 +142,31 @@ export default function App() {
 
             {/* Status Area */}
             {status !== 'idle' && (
-              <div className={`rounded-xl p-4 flex items-center gap-3 ${
+              <div className={`rounded-xl p-4 flex flex-col gap-4 ${
                 status === 'error' ? 'bg-red-500/10 text-red-400 border border-red-500/20' :
                 status === 'done' ? 'bg-[#00a884]/10 text-[#00a884] border border-[#00a884]/20' :
                 'bg-[#2a3942] text-[#e9edef]'
               }`}>
-                {status === 'error' && <AlertCircle className="w-5 h-5 shrink-0" />}
-                {status === 'done' && <CheckCircle2 className="w-5 h-5 shrink-0" />}
-                {status === 'qr' && <QrCode className="w-5 h-5 shrink-0 animate-pulse text-[#00a884]" />}
-                {(status === 'scanning' || status === 'scraping') && <Loader2 className="w-5 h-5 shrink-0 animate-spin text-[#00a884]" />}
-                
-                <div className="flex-1 font-medium">
-                  {status === 'scanning' && 'Initializing scraper...'}
-                  {status === 'qr' && 'Open WhatsApp Web in the terminal window and scan the QR code.'}
-                  {status === 'scraping' && 'Scanning group members...'}
-                  {status === 'done' && 'Extraction complete!'}
-                  {status === 'error' && errorMsg}
+                <div className="flex items-center gap-3">
+                  {status === 'error' && <AlertCircle className="w-5 h-5 shrink-0" />}
+                  {status === 'done' && <CheckCircle2 className="w-5 h-5 shrink-0" />}
+                  {status === 'qr' && <QrCode className="w-5 h-5 shrink-0 animate-pulse text-[#00a884]" />}
+                  {(status === 'scanning' || status === 'scraping') && <Loader2 className="w-5 h-5 shrink-0 animate-spin text-[#00a884]" />}
+                  
+                  <div className="flex-1 font-medium">
+                    {status === 'scanning' && 'Initializing scraper...'}
+                    {status === 'qr' && 'Scan the QR code below with your WhatsApp app to log in.'}
+                    {status === 'scraping' && 'Scanning group members...'}
+                    {status === 'done' && 'Extraction complete!'}
+                    {status === 'error' && errorMsg}
+                  </div>
                 </div>
+
+                {status === 'qr' && qrCodeData && (
+                  <div className="flex justify-center p-6 bg-white rounded-xl mx-auto mt-2">
+                    <QRCode value={qrCodeData} size={256} />
+                  </div>
+                )}
               </div>
             )}
 
