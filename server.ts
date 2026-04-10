@@ -73,7 +73,14 @@ async function startServer() {
       }, 2000);
 
       // Wait for login (chat list appears)
-      await page.waitForSelector('[data-testid="chat-list"]', { timeout: 120000 });
+      try {
+        // Increased timeout to 3 minutes (180000ms) to give users plenty of time to scan the QR code
+        // We wait for the side pane which contains the chat list
+        await page.waitForSelector('#pane-side', { timeout: 180000 });
+      } catch (e) {
+        throw new Error("Login timed out. Please ensure you scan the QR code within 3 minutes.");
+      }
+      
       clearInterval(qrInterval);
       currentQrCode = null;
       currentStatus = "scraping";
