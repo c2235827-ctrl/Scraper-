@@ -37,7 +37,7 @@ async function startServer() {
       const inviteCode = match[1];
 
       browser = await puppeteer.launch({
-        headless: false, // MUST be visible — WhatsApp Web requires real browser
+        headless: true, // Reverted to true because the container lacks an X server
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
         defaultViewport: null,
       });
