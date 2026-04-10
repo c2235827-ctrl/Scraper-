@@ -1,0 +1,5 @@
+{
+  "name": "WA Group Scraper",
+  "description": "A clean web-based tool to extract phone numbers and names from WhatsApp group invite links.",
+  "requestFramePermissions": []
+}
