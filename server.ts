@@ -110,32 +110,56 @@ async function startServer() {
       await sleep(2000);
 
       // Wait for the right drawer / info panel to open
-      await page.waitForSelector('[data-testid="drawer-right"]', { timeout: 15000 });
-      await sleep(1500);
+      try {
+        await page.waitForFunction(() => {
+          return document.querySelector('[data-testid="drawer-right"]') || 
+                 document.querySelector('[data-testid="group-info-drawer"]') ||
+                 document.querySelectorAll('header').length > 1;
+        }, { timeout: 15000 });
+      } catch (e) {
+        console.log("Warning: Could not detect drawer opening, attempting to proceed anyway...");
+      }
+      await sleep(2000);
 
       // Scroll the right drawer panel to load ALL virtualized participants
       console.log("⬇️  Scrolling to load all members...");
       const totalScrolls = 60; // Handles groups up to ~500 members
+      
+      const scrollDrawer = async (amount: number) => {
+        await page.evaluate((scrollAmount) => {
+          const drawer = document.querySelector('[data-testid="drawer-right"]') || 
+                         document.querySelector('[data-testid="group-info-drawer"]') ||
+                         (document.querySelectorAll('header')[1] ? document.querySelectorAll('header')[1].parentElement?.parentElement : null);
+          
+          if (drawer) {
+            // Find the scrollable container inside the drawer
+            const scrollable = drawer.querySelector('div[style*="overflow-y: auto"], div[style*="overflow-y: scroll"], div[class*="overflow-y-auto"]') || drawer;
+            (scrollable as HTMLElement).scrollTop += scrollAmount;
+          } else {
+            // Fallback: find any scrollable div on the right half of the screen
+            const divs = Array.from(document.querySelectorAll('div')).filter(d => 
+              d.scrollHeight > d.clientHeight && 
+              d.getBoundingClientRect().left > window.innerWidth / 2
+            );
+            if (divs.length > 0) {
+              // Usually the deepest scrollable div is the one we want
+              divs[divs.length - 1].scrollTop += scrollAmount;
+            }
+          }
+        }, amount);
+      };
+
       for (let i = 0; i < totalScrolls; i++) {
-        await page.evaluate(() => {
-          const panel = document.querySelector('[data-testid="drawer-right"]');
-          if (panel) panel.scrollTop += 400;
-        });
+        await scrollDrawer(400);
         await sleep(200);
       }
 
       // Scroll back to top and do it again (to catch late-loading items)
-      await page.evaluate(() => {
-        const panel = document.querySelector('[data-testid="drawer-right"]');
-        if (panel) panel.scrollTop = 0;
-      });
-      await sleep(500);
+      await scrollDrawer(-50000); // Scroll all the way up
+      await sleep(1000);
 
       for (let i = 0; i < totalScrolls; i++) {
-        await page.evaluate(() => {
-          const panel = document.querySelector('[data-testid="drawer-right"]');
-          if (panel) panel.scrollTop += 400;
-        });
+        await scrollDrawer(400);
         await sleep(150);
       }
 
@@ -146,16 +170,22 @@ async function startServer() {
       const members = await page.evaluate(() => {
         const results = new Set<string>();
 
+        const drawer = document.querySelector('[data-testid="drawer-right"]') || 
+                       document.querySelector('[data-testid="group-info-drawer"]') ||
+                       (document.querySelectorAll('header')[1] ? document.querySelectorAll('header')[1].parentElement?.parentElement : document.body);
+
+        if (!drawer) return [];
+
         // Primary selector: participant cell titles in the drawer
         const selectors = [
-          '[data-testid="drawer-right"] [data-testid="cell-frame-title"] span',
-          '[data-testid="drawer-right"] ._21S-L span[dir="auto"]',
-          '[data-testid="drawer-right"] span[dir="auto"][title]',
-          '[data-testid="drawer-right"] .zoWT4 span[dir="auto"]',
+          '[data-testid="cell-frame-title"] span',
+          '._21S-L span[dir="auto"]',
+          'span[dir="auto"][title]',
+          '.zoWT4 span[dir="auto"]',
         ];
 
         for (const sel of selectors) {
-          document.querySelectorAll(sel).forEach((el) => {
+          drawer.querySelectorAll(sel).forEach((el) => {
             const text = (el as HTMLElement).innerText?.trim() ||
               el.getAttribute("title")?.trim() || "";
 
@@ -173,16 +203,13 @@ async function startServer() {
 
         // Fallback: scan all spans with title attribute in the drawer
         // This catches phone numbers for unsaved contacts
-        const drawer = document.querySelector('[data-testid="drawer-right"]');
-        if (drawer) {
-          drawer.querySelectorAll("span[title]").forEach((el) => {
-            const title = el.getAttribute("title")?.trim() || "";
-            // Phone number pattern: starts with + or digits, 7+ chars
-            if (title && (title.startsWith("+") || /^\d{7,}/.test(title))) {
-              results.add(title);
-            }
-          });
-        }
+        drawer.querySelectorAll("span[title]").forEach((el) => {
+          const title = el.getAttribute("title")?.trim() || "";
+          // Phone number pattern: starts with + or digits, 7+ chars
+          if (title && (title.startsWith("+") || /^\d{7,}/.test(title))) {
+            results.add(title);
+          }
+        });
 
         return Array.from(results);
       });
